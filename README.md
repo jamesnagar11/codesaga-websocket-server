@@ -33,13 +33,13 @@
 
 ## 🏗️ Full System Architecture — Interactive Diagram
 
-> **👉 [Open Full Interactive Diagram →](https://jamesnagar11.github.io/codesaga/diagram/)**
+> **👉 [Open Rendered Interactive Diagram (GitHub Pages) →](https://jamesnagar11.github.io/codesaga/diagram/index.html)**  
 >
 > *Pan, zoom, shift arrows, hover nodes for details — switch between Full System and this module's view*
 
 <div align="center">
 
-[![Architecture Diagram](https://img.shields.io/badge/🔍_View_Interactive_Diagram-22d3ee?style=for-the-badge&logoColor=white)](https://jamesnagar11.github.io/codesaga/diagram/)
+[![Architecture Diagram](https://img.shields.io/badge/🔍_View_Interactive_Diagram-22d3ee?style=for-the-badge&logoColor=white)](https://jamesnagar11.github.io/codesaga/diagram/index.html)
 
 </div>
 
