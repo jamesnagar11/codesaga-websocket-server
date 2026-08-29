@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ codesaga-ws — Socket Gateway Server
+# ⚡ codesaga-websocket-server — Socket Gateway
 
 **The real-time WebSocket backbone of CodeSaga**  
 *Socket.IO gateway · Redis Streams producer · Pub/Sub subscriber · Prometheus metrics*
@@ -23,41 +23,87 @@
 | Module | Repo | Role | Docker Image |
 |--------|------|------|--------------|
 | ① Client | [`codesaga`](https://github.com/jamesnagar11/codesaga) | Next.js Client — UI, Auth, Problem Pages | `jamesnagar/codesaga-client` |
-| **② You are here** | [`codesaga-ws`](https://github.com/jamesnagar11/codesaga-ws) | WebSocket server, Redis Streams producer, Pub/Sub subscriber | `jamesnagar/codesaga-ws` |
-| ③ Execution Engine | [`codesaga-engine`](https://github.com/jamesnagar11/codesaga-engine) | Sandboxed code runner (Java, C++, Python) | `jamesnagar/codesaga-engine` |
-| ④ Bulk DB Executor | [`bulk-executor`](https://github.com/jamesnagar11/bulk-executor) | Batches up to 100 DB writes in a single SQL statement | `jamesnagar/codesaga-bulk` |
-| ⑤ Cron Sweeper | [`bulk-executor-janitor`](https://github.com/jamesnagar11/bulk-executor-janitor) | Auto-claims stale jobs, reconciles Redis memory | `jamesnagar/codesaga-cron` |
+| **② You are here** | [`codesaga-websocket-server`](https://github.com/jamesnagar11/codesaga-websocket-server) | WebSocket server, Redis Streams producer, Pub/Sub subscriber | `jamesnagar/codesaga-ws` |
+| ③ Execution Engine | [`codesaga-execution-engine`](https://github.com/jamesnagar11/codesaga-execution-engine) | Sandboxed code runner (Java, C++, Python) | `jamesnagar/codesaga-engine` |
+| ④ Bulk DB Executor | [`codesaga-bulk-executor`](https://github.com/jamesnagar11/codesaga-bulk-executor) | Batches up to 100 DB writes in a single SQL statement | `jamesnagar/codesaga-bulk` |
+| ⑤ Cron Sweeper | [`codesaga-bulk-master`](https://github.com/jamesnagar11/codesaga-bulk-master) | Auto-claims stale jobs, reconciles Redis memory | `jamesnagar/codesaga-cron` |
 | ⚙️ GitOps Config | [`staging-ops`](https://github.com/jamesnagar11/staging-ops) | Kubernetes manifests managed by ArgoCD | — |
 
 ---
 
-## 🏗️ Full System Architecture
+## 🏗️ Full System Architecture — Interactive Diagram
+
+> **👉 [Open Full Interactive Diagram →](https://jamesnagar11.github.io/codesaga/diagram/)**
+>
+> *Pan, zoom, shift arrows, hover nodes for details — switch between Full System and this module's view*
+
+<div align="center">
+
+[![Architecture Diagram](https://img.shields.io/badge/🔍_View_Interactive_Diagram-22d3ee?style=for-the-badge&logoColor=white)](https://jamesnagar11.github.io/codesaga/diagram/)
+
+</div>
+
+---
+
+### 📐 Full System Overview
 
 ```
-                           ┌─────────────────────────────────────────────────────────────────────┐
-                           │                     Kubernetes Cluster (k8s)                         │
-                           │                                                                       │
- ┌──────────┐   HTTPS/WS   │  ┌────────────────────────────────────────────────────────────────┐ │
- │  Users   │─────────────►│  │           NGINX Ingress + Load Balancer                        │ │
- └──────────┘              │  └──────┬────────────────────────────────┬────────────────────────┘ │
-                           │         │ /                              │ /socket.io               │
-                           │  ┌──────▼──────┐             ┌──────────▼──────────────────┐       │
-                           │  │  CodeSaga   │◄────────────►│  ★ Socket Servers (THIS)    │       │
-                           │  │ (Next.js)   │  REST/Auth  │  KEDA: 1 pod / 10k users    │       │
-                           │  └─────────────┘             └──┬──────────────────────┬───┘       │
-                           │                                  │ produce               │ subscribe │
-                           │                    ┌─────────────▼──┐            ┌──────▼────────┐  │
-                           │                    │ Redis Stream    │            │ Redis Pub/Sub │  │
-                           │                    │ events:code     │            │ Channels      │  │
-                           │                    └─────────────────┘            └───────────────┘  │
-                           └─────────────────────────────────────────────────────────────────────┘
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                     ☸  Kubernetes Cluster (k8s)                             ║
+║                                                                              ║
+║  ┌──────────┐    ┌──────────────────────────────────────────────────────┐   ║
+║  │  Users   │───►│         NGINX Ingress + Load Balancer                │   ║
+║  │ 10k-200k │    └──────────────────────┬──────────────────┬───────────┘   ║
+║  └──────────┘                           │ /                │ /socket.io     ║
+║                            ┌────────────▼──┐   ┌──────────▼──────────────┐ ║
+║                            │  ① Next.js    │   │  ★ ② Socket Gateway     │ ║
+║                            │   Client      │   │  KEDA: 1 pod/10k users  │ ║
+║                            └───────────────┘   └──────┬──────────────────┘ ║
+║                                        ▲               │ XADD               ║
+║                                        │  codeResponse  ▼                   ║
+║                          ┌─────────────┴───────────────────────────────────┐ ║
+║                          │  Redis: Stream events:code  │  Pub/Sub Channels  │ ║
+║                          │  Stream events:db            │  code:result:{id}  │ ║
+║                          └──────────────────────────────────────────────────┘ ║
+╚══════════════════════════════════════════════════════════════════════════════╝
 ```
+
+---
+
+### 🔍 This Module — Data Flow
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│               ② codesaga-websocket-server (this service)              │
+│                                                                        │
+│  User connects via Socket.IO (port 9090)                              │
+│           │                                                            │
+│           │  event: codeRequestQueue { code, language, ... }          │
+│           ▼                                                            │
+│  Redis Stream PRODUCE ──► codesaga:events:code ──► Exec Engine Workers │
+│                                                                        │
+│  Redis Pub/Sub SUBSCRIBE ◄── code:result:{server-uuid}                │
+│           │                   (published by Execution Engine)          │
+│           │                                                            │
+│           ▼                                                            │
+│  socket.to(socketId).emit('codeResponse', result)                     │
+│           │                                                            │
+│           │  also produces DB write job:                               │
+│           ▼                                                            │
+│  Redis Stream PRODUCE ──► codesaga:events:db ──► Bulk Executor        │
+│                                                                        │
+│  GET /metrics  ──►  Prometheus scrapes ──►  KEDA autoscales pods      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### Why each socket server subscribes to its own Pub/Sub channel?
+Each pod runs as a unique subscriber (`code:result:{server-uuid}`). When an execution engine worker publishes the result, **only the socket server that originally received the request** will get it — ensuring the result is delivered to the correct user even across a cluster of 20 socket servers. This is the key to horizontal scalability.
 
 ---
 
 ## 📋 What This Module Does
 
-`codesaga-ws` is the **real-time nervous system** of the platform. It sits between the Next.js client and the distributed backend workers — handling all WebSocket connections, routing code submissions into Redis Streams, and delivering execution results back to the exact user who submitted in real-time.
+`codesaga-websocket-server` is the **real-time nervous system** of the platform. It sits between the Next.js client and the distributed backend workers — handling all WebSocket connections, routing code submissions into Redis Streams, and delivering execution results back to the exact user who submitted in real-time.
 
 ### Responsibilities
 
@@ -71,35 +117,6 @@
 | **Queue DB write jobs** | Produces to `codesaga:events:db` Redis Stream |
 | **Expose metrics** | `GET /metrics` — Prometheus-compatible endpoint |
 | **Health check** | `GET /health` — used by k8s liveness probe |
-
----
-
-## 🔄 Data Flow (This Module)
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                    codesaga-ws  (this service)                    │
-│                                                                    │
-│   User connects via Socket.IO                                     │
-│           │                                                        │
-│           │ event: codeRequestQueue { code, language, ... }       │
-│           ▼                                                        │
-│   Redis Stream PRODUCE ──► codesaga:events:code ──► Exec Workers  │
-│                                                                    │
-│   Redis Pub/Sub SUBSCRIBE ◄── code:result:{server-uuid}           │
-│           │                   (published by Execution Engine)      │
-│           │                                                        │
-│           ▼                                                        │
-│   socket.to(socketId).emit('codeResponse', result)               │
-│           │                                                        │
-│           │ also produces DB write job:                            │
-│           ▼                                                        │
-│   Redis Stream PRODUCE ──► codesaga:events:db ──► Bulk Executor   │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-### Why each socket server subscribes to its own Pub/Sub channel?
-Each pod runs as a unique subscriber (`code:result:{server-uuid}`). When an execution engine worker publishes the result, **only the socket server that originally received the request** will get it — ensuring the result is delivered to the correct user even across a cluster of 20 socket servers. This is the key to horizontal scalability.
 
 ---
 
@@ -142,8 +159,8 @@ Each pod runs as a unique subscriber (`code:result:{server-uuid}`). When an exec
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/jamesnagar11/codesaga-ws.git
-cd codesaga-ws
+git clone https://github.com/jamesnagar11/codesaga-websocket-server.git
+cd codesaga-websocket-server
 
 # 2. Install dependencies
 npm install
