@@ -8,7 +8,13 @@ import { redisClient, subscriber } from './config/redis.js';
 import { EventStream } from './stream/redis.js';
 import { randomUUID } from 'node:crypto';
 import { client } from './config/prom.js';
+import { socketMiddleware } from './middleware.js';
+import { RateLimiterMemory, RateLimiterRedis, RateLimiterRes } from 'rate-limiter-flexible';
 dotenv.config();
+
+const RATE_LIMIT_POINTS   = 5;   // max requests per window per user
+const RATE_LIMIT_DURATION = 10;  // window in seconds
+const RETRY_AFTER_SECONDS = 2;   // communicated back to the client
 
 const app = express();
 const server = createServer(app);
@@ -24,6 +30,8 @@ const io = new Server<
         methods: ['GET','POST','PUT']
     }
 });
+
+io.use(socketMiddleware);
 
 app.get('/health', (req: Request, res: Response) => {
     res.send("Codesaga Socket Server Healthy");
@@ -51,6 +59,14 @@ async function main() {
     try {
         await redisClient.connect();
         await subscriber.connect();
+
+        const rateLimiter = new RateLimiterRedis({
+            storeClient: redisClient,
+            useRedisPackage: true,
+            points: RATE_LIMIT_POINTS,
+            duration: RATE_LIMIT_DURATION,
+            keyPrefix: 'rl:codeRequestQueue',
+        })
 
         const stream = new EventStream({
             redisClient: redisClient,
@@ -85,8 +101,26 @@ async function main() {
             console.log(`User Connected : ${socket.id}`);
 
             socket.on('codeRequestQueue', async (req: codeRequest) => {
+                const rateLimitKey = socket.data.user.id ?? socket.id;
+
+                try {
+                    await rateLimiter.consume(rateLimitKey);
+                } catch (err) {
+                    if (err instanceof RateLimiterRes) {
+                        socket.emit('rateLimited', {
+                            status:     429,
+                            message:    'Too many requests. Please slow down and try again.',
+                            retryAfter: RETRY_AFTER_SECONDS,
+                        });
+                        console.warn(`Rate limited user [${rateLimitKey}] on codeRequestQueue. msBeforeNext=${err.msBeforeNext}`);
+                        return;
+                    }
+                    console.error('Rate limiter unexpected error:', err);
+                    return;
+                }
+
                 console.log(`Data received now pushing to stream`);
-                await stream.produce("code:request", {...req, subscribedTo: `code:result:${subscriber_id}`});
+                 await stream.produce("code:request", {...req, subscribedTo: `code:result:${subscriber_id}`});
             });
 
             socket.on('disconnect', () => {

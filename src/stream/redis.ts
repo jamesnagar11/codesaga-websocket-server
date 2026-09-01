@@ -1,4 +1,4 @@
-import type { RedisClientType } from "redis";
+import type { RedisClientType } from 'redis';
 
 export interface EventStreamOptions {
     redisClient?: RedisClientType | undefined;
